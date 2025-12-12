@@ -1,0 +1,112 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KINI × Yessenov — Главная</title>
+
+  <link rel="stylesheet" href="{% static 'css/main.css' %}">
+</head>
+
+<body>
+
+  <!-- Шапка -->
+  <header class="home-header">
+    <img src="{% static 'img/kini.png' %}" alt="KINI Logo">
+
+    <div class="auth-buttons">
+      {% if user.is_authenticated %}
+        <span class="hello">👋 {{ user.username }}</span>
+        <a href="{% url 'logout' %}">Выйти</a>
+      {% else %}
+        <a href="{% url 'login' %}">Войти</a>
+        <a href="{% url 'register' %}">Регистрация</a>
+      {% endif %}
+    </div>
+
+    <img src="{% static 'img/yessenov.png' %}" alt="Yessenov Logo">
+  </header>
+
+  <!-- Баннер -->
+  <section class="banner">
+    <div class="fade-slide"><img src="{% static 'img/banner1.png' %}" alt="Banner 1"></div>
+    <div class="fade-slide"><img src="{% static 'img/banner2.png' %}" alt="Banner 2"></div>
+    <div class="fade-slide"><img src="{% static 'img/banner3.png' %}" alt="Banner 3"></div>
+  </section>
+
+  <!-- Карточки -->
+  <main class="home-main">
+    <div class="cards">
+      <div class="card" style="background-image:url('{% static "img/event1.jpg" %}')" data-event="1">
+        <div class="overlay">
+          <h3>Осенний бал 🍁</h3>
+          <p>Красивый вечер с танцами и музыкой.</p>
+          <button class="btn btn-light">Записаться</button>
+        </div>
+      </div>
+
+      <div class="card" style="background-image:url('{% static "img/event2.jpg" %}')" data-event="2">
+        <div class="overlay">
+          <h3>Хэллоуин 🎃</h3>
+          <p>Костюмированная вечеринка с конкурсами.</p>
+          <button class="btn btn-light">Записаться</button>
+        </div>
+      </div>
+
+      <div class="card" style="background-image:url('{% static "img/event3.jpg" %}')" data-event="3">
+        <div class="overlay">
+          <h3>Встреча с деканом 🎓</h3>
+          <p>Открытый диалог и ответы на вопросы.</p>
+          <button class="btn btn-light">Записаться</button>
+        </div>
+      </div>
+
+      <div class="card" style="background-image:url('{% static "img/event4.jpg" %}')" data-event="4">
+        <div class="overlay">
+          <h3>Кинозал 🎬</h3>
+          <p>Просмотр фильмов для студентов.</p>
+          <button class="btn btn-light">Записаться</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- О проекте -->
+  <section class="about">
+    <h2>🌟 О проекте <span>KINI × Yessenov</span></h2>
+    <p>
+      Этот сайт создан студентами <strong>Kazakh-German Institute of Sustainable Engineering</strong>
+      при поддержке <strong>Yessenov University</strong> для организации и регистрации студенческих мероприятий.
+    </p>
+    <p>
+      Наша цель — сделать студенческую жизнь ярче: танцы, встречи, киновечера и дружеские проекты.
+      Следи за новостями и участвуй в жизни кампуса 💫
+    </p>
+  </section>
+
+  <!-- Подвал -->
+  <footer class="home-footer">
+    <p>© 2025 Kini × Yessenov | Сделано с 💛 в Aktau</p>
+  </footer>
+
+  <!-- JS -->
+  <script>
+    document.querySelectorAll(".card .btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const isAuth = "{{ user.is_authenticated|yesno:'1,0' }}" === "1";
+        const eventId = btn.closest(".card").dataset.event;
+
+        if(!isAuth){
+          alert("Чтобы записаться, пожалуйста войдите или зарегистрируйтесь 🙂");
+          window.location.href = "{% url 'login' %}";
+        } else {
+          // Тут можно будет позже сделать нормальную запись на реальное событие из базы
+          window.location.href = "/dashboard/";
+        }
+      });
+    });
+  </script>
+
+</body>
+</html>

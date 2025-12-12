@@ -1,0 +1,38 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Отзыв о мероприятии</title>
+
+<link rel="stylesheet" href="{% static 'css/main.css' %}">
+<link rel="stylesheet" href="{% static 'css/feedback.css' %}">
+</head>
+<body>
+
+<div class="fb-wrap">
+  <div class="fb-card">
+    <h2>{{ event.title }}</h2>
+
+    <form method="post">
+      {% csrf_token %}
+
+      <label>Оценка:</label>
+      <div class="stars">
+        <input type="radio" id="s5" name="rating" value="5" required><label for="s5">★</label>
+        <input type="radio" id="s4" name="rating" value="4"><label for="s4">★</label>
+        <input type="radio" id="s3" name="rating" value="3"><label for="s3">★</label>
+        <input type="radio" id="s2" name="rating" value="2"><label for="s2">★</label>
+        <input type="radio" id="s1" name="rating" value="1"><label for="s1">★</label>
+      </div>
+
+      <label>Комментарий:</label>
+      <textarea name="comment"></textarea>
+
+      <button type="submit" class="btn">Отправить</button>
+    </form>
+  </div>
+</div>
+
+</body>
+</html>

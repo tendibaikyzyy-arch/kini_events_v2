@@ -1,0 +1,40 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Отчёты</title>
+
+<link rel="stylesheet" href="{% static 'css/main.css' %}">
+<link rel="stylesheet" href="{% static 'css/reports.css' %}">
+</head>
+<body>
+
+<div class="reports-wrap">
+  <a href="{% url 'dashboard' %}" class="back">← Назад</a>
+
+  <table>
+    <tr>
+      <th>Мероприятие</th>
+      <th>Дата</th>
+      <th>Записалось</th>
+      <th>Пришло</th>
+      <th>%</th>
+      <th>Оценка</th>
+    </tr>
+
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.event.title }}</td>
+      <td>{{ row.event.date }}</td>
+      <td>{{ row.total }}</td>
+      <td>{{ row.attended }}</td>
+      <td>{{ row.rate }}</td>
+      <td>{{ row.avg_rating }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+</body>
+</html>

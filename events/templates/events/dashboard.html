@@ -1,0 +1,288 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>KINI × Yessenov — Календарь</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- общий стиль -->
+  <link rel="stylesheet" href="{% static 'css/main.css' %}">
+  <!-- стиль именно для дашборда -->
+  <link rel="stylesheet" href="{% static 'css/dashboard.css' %}">
+
+  <!-- FullCalendar -->
+  <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js"></script>
+</head>
+
+<body class="dash-body">
+
+  <div class="top">
+    <img src="{% static 'img/yessenov.png' %}" alt="Yessenov">
+    <img src="{% static 'img/kini.png' %}" alt="KINI">
+  </div>
+
+  <div class="container">
+    <div class="sidebar">
+      <a href="#" class="active" data-view="calendar">📅 Календарь</a>
+      <a href="#" data-view="events">📌 Мероприятия</a>
+      <a href="#" data-view="my">⭐ Мои события</a>
+      <a href="#" data-view="notif">🔔 Уведомления</a>
+
+      {% if user.is_staff %}
+        <a href="{% url 'reports' %}">📊 Отчёты</a>
+      {% endif %}
+
+      <form action="{% url 'logout' %}" method="post" class="logout-form">
+        {% csrf_token %}
+        <button type="submit">🚪 Выйти</button>
+      </form>
+    </div>
+
+    <div class="main">
+      <!-- Django messages (превратим в тосты) -->
+      <div class="messages">
+        {% for m in messages %}
+          <div class="msg {% if m.tags == 'success' %}ok{% else %}err{% endif %}">{{ m }}</div>
+        {% endfor %}
+      </div>
+
+      <section id="calendar" class="section active">
+        <div id="calendarContainer"></div>
+      </section>
+
+      <section id="events" class="section">
+        <h2>Все мероприятия</h2>
+        <div id="eventList" class="cards"></div>
+      </section>
+
+      <section id="my" class="section">
+        <h2>Мои события</h2>
+        <div id="myEventList" class="cards"></div>
+      </section>
+
+      <section id="notif" class="section">
+        <h2>Уведомления</h2>
+        <div id="notifList"></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- hidden POST form (CSRF) -->
+  <form id="bookForm" method="POST" style="display:none;">
+    {% csrf_token %}
+  </form>
+
+  <script>
+    const URL_EVENTS_JSON    = "{% url 'events_json' %}";
+    const URL_REMINDERS_JSON = "{% url 'reminders_json' %}";
+    const URL_MY_EVENTS_JSON = "{% url 'my_events_json' %}";
+    const URL_NOTIFS_JSON    = "{% url 'notifications_json' %}";
+    const URL_BOOK_TEMPLATE  = "{% url 'register_for_event' 0 %}";
+
+    function createToast(text, type){
+      const box = document.getElementById('toastContainer');
+      const el  = document.createElement('div');
+      el.className = 'toast ' + (type === 'ok' ? 'toast-ok' : 'toast-err');
+      el.textContent = text;
+      box.appendChild(el);
+      setTimeout(()=> el.classList.add('show'), 10);
+      setTimeout(()=>{
+        el.classList.remove('show');
+        setTimeout(()=> el.remove(), 400);
+      }, 4000);
+    }
+    
+    function showDjangoMessagesAsToasts(){
+      const msgBox = document.querySelector('.messages');
+      if(!msgBox) return;
+      const msgs = msgBox.querySelectorAll('.msg');
+      if(!msgs.length) return;
+
+      msgs.forEach(m=>{
+        const text = m.textContent.trim();
+        if(!text) return;
+        const type = m.classList.contains('ok') ? 'ok' : 'err';
+        createToast(text, type);
+      });
+
+      msgBox.style.display = 'none';
+    }
+
+    async function showRemindersToasts(){
+  try{
+    const res = await fetch(URL_REMINDERS_JSON);
+    const data = await res.json();
+    if(!data.length) return;
+
+    data.forEach(r => {
+      const txt = `Напоминание: ${r.title} ${r.when}` + (r.place ? ` • ${r.place}` : '');
+      createToast(txt, 'ok');
+    });
+  }catch(e){
+    // молча
+  }
+}
+
+    
+    function updateNotifMenuBadge(count){
+      const link = document.querySelector('.sidebar a[data-view="notif"]');
+      if(!link) return;
+      if(count > 0){
+        link.textContent = `🔔 Уведомления (${count})`;
+        link.classList.add('has-new');
+      }else{
+        link.textContent = '🔔 Уведомления';
+        link.classList.remove('has-new');
+      }
+    }
+
+    async function initNotifBadge(){
+      try{
+        const res  = await fetch(URL_NOTIFS_JSON);
+        const data = await res.json();
+        updateNotifMenuBadge(data.length);
+      }catch(err){}
+    }
+
+    document.querySelectorAll(".sidebar a[data-view]").forEach(link => {
+      link.onclick = e => {
+        e.preventDefault();
+        document.querySelectorAll(".sidebar a").forEach(a => a.classList.remove("active"));
+        link.classList.add("active");
+        document.querySelectorAll(".section").forEach(sec => sec.classList.remove("active"));
+        const id = link.dataset.view;
+        document.getElementById(id).classList.add("active");
+
+        if (id === 'events') loadEvents();
+        if (id === 'my')     loadMyEvents();
+        if (id === 'notif')  {
+          loadNotifs();
+          updateNotifMenuBadge(0);
+        }
+      };
+    });
+
+    document.addEventListener('DOMContentLoaded', function() {
+      const el = document.getElementById('calendarContainer');
+      const calendar = new FullCalendar.Calendar(el, {
+        initialView: 'dayGridMonth',
+        locale: 'ru',
+        height: 650,
+        headerToolbar: {
+          left:'prev,next today',
+          center:'title',
+          right:'dayGridMonth,timeGridWeek'
+        },
+        events: URL_EVENTS_JSON,
+        eventClick: function(info) {
+          const start = info.event.start ? info.event.start.toLocaleString() : '';
+          alert('Мероприятие: ' + info.event.title + '\nДата: ' + start);
+        }
+      });
+      calendar.render();
+
+      showDjangoMessagesAsToasts();
+      initNotifBadge();
+    });
+
+    async function loadEvents(){
+      const box = document.getElementById('eventList');
+      box.innerHTML = 'Загрузка...';
+      try{
+        const res  = await fetch(URL_EVENTS_JSON);
+        const data = await res.json();
+        if(!data.length){
+          box.innerHTML = '<p class="muted">Пока нет мероприятий.</p>';
+          return;
+        }
+        box.innerHTML = '';
+        data.forEach(e => {
+          const left = Math.max((e.capacity || 0) - (e.taken || 0), 0);
+          const card = document.createElement('div');
+          card.className = 'card';
+          card.innerHTML = `
+            <h3>${e.title}</h3>
+            <p class="muted">${e.description || ''}</p>
+            <p><b>Когда:</b> ${(e.start || '').replace('T',' ')}</p>
+            <p><b>Где:</b> ${e.place || '—'}</p>
+            <p><b>Мест:</b> ${e.capacity || '—'} • <b>Свободно:</b> ${left}</p>
+            <button class="btn" ${left<=0?'disabled':''} onclick="book(${e.id})">Записаться</button>
+          `;
+          box.appendChild(card);
+        });
+      }catch(err){
+        box.innerHTML = '<p class="muted">Ошибка загрузки.</p>';
+      }
+    }
+
+    async function loadMyEvents(){
+      const box = document.getElementById('myEventList');
+      box.innerHTML = 'Загрузка...';
+      try{
+        const res  = await fetch(URL_MY_EVENTS_JSON);
+        const data = await res.json();
+        if(!data.length){
+          box.innerHTML = '<p class="muted">Вы ещё не записались на мероприятия.</p>';
+          return;
+        }
+        box.innerHTML = '';
+        data.forEach(e => {
+          const card = document.createElement('div');
+          card.className = 'card';
+          card.innerHTML = `
+            <h3>${e.title}</h3>
+            <p><b>Дата:</b> ${e.date} ${e.time || ''}</p>
+            <p><b>Место:</b> ${e.place || '—'}</p>
+            <button class="btn" onclick="leaveFeedback(${e.id})">Оставить отзыв</button>
+          `;
+          box.appendChild(card);
+        });
+      }catch(err){
+        box.innerHTML = '<p class="muted">Ошибка загрузки.</p>';
+      }
+    }
+
+    function leaveFeedback(eventId){
+      window.location.href = `/events/${eventId}/feedback/`;
+    }
+
+    async function loadNotifs(){
+      const box = document.getElementById('notifList');
+      box.innerHTML = 'Загрузка...';
+      try{
+        const res  = await fetch(URL_NOTIFS_JSON);
+        const data = await res.json();
+        if(!data.length){
+          box.innerHTML = '<p class="muted">Нет новых уведомлений.</p>';
+          return;
+        }
+        box.innerHTML = '';
+        data.forEach(n => {
+          const row = document.createElement('div');
+          row.className = 'card';
+          row.innerHTML = `
+            <b>${n.title}</b><br>
+            <span class="muted">${n.created}</span>
+            <p>${n.body || ''}</p>
+          `;
+          box.appendChild(row);
+        });
+      }catch(err){
+        box.innerHTML = '<p class="muted">Ошибка загрузки.</p>';
+      }
+    }
+
+    function book(eventId){
+      const form = document.getElementById('bookForm');
+      form.action = URL_BOOK_TEMPLATE.replace('/0/', `/${eventId}/`);
+      form.submit();
+    }
+  </script>
+
+</body>
+</html>

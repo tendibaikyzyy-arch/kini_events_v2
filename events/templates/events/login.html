@@ -1,0 +1,30 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Вход — KINI × Yessenov</title>
+  <link rel="stylesheet" href="{% static 'css/auth.css' %}">
+</head>
+<body>
+  <div class="container">
+    <div class="logos">
+      <img src="{% static 'img/kini.png' %}" alt="Kini">
+      <img src="{% static 'img/yessenov.png' %}" alt="Yessenov">
+    </div>
+
+    <h2>Вход в аккаунт</h2>
+
+    <form method="POST" action="{% url 'login' %}">
+      {% csrf_token %}
+      <input type="text" name="username" placeholder="Имя пользователя" required>
+      <input type="password" name="password" placeholder="Пароль" required>
+      <button type="submit">Войти</button>
+    </form>
+
+    <div class="small-text">
+      <a href="{% url 'register' %}">Нет аккаунта? Зарегистрироваться</a>
+    </div>
+  </div>
+</body>
+</html>
