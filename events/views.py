@@ -265,6 +265,11 @@ def register_for_event(request, event_id):
         messages.info(request, 'Вы уже зарегистрированы на это мероприятие.')
         return redirect('dashboard')
 
+
+    if event.date < timezone.now().date():
+        messages.error(request, "Регистрация на это мероприятие уже закрыта")
+        return redirect("dashboard") 
+
     # ✅ Уведомление-НАПОМИНАНИЕ студенту (без таймера, но с расчётом дней)
     title, body = _reminder_text(event)
     Notification.objects.create(user=request.user, title=title, body=body)
