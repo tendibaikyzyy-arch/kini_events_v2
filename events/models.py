@@ -1,7 +1,6 @@
 from django.conf import settings
 from django.db import models
 
-
 class Event(models.Model):
     title = models.CharField(max_length=200)
     description = models.TextField(blank=True)
@@ -17,6 +16,7 @@ class Event(models.Model):
         related_name="events_created"
     )
 
+    # ✅ нужно для отмены
     is_cancelled = models.BooleanField(default=False)
 
     class Meta:
@@ -62,7 +62,7 @@ class Notification(models.Model):
 
 
 class Feedback(models.Model):
-    RATING_CHOICES = [(1, "1"), (2, "2"), (3, "3"), (4, "4"), (5, "5")]
+    RATING_CHOICES = [(1,"1"),(2,"2"),(3,"3"),(4,"4"),(5,"5")]
 
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="feedbacks")
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="feedbacks")
