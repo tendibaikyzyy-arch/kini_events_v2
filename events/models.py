@@ -18,6 +18,7 @@ class Event(models.Model):
     )
 
     is_cancelled = models.BooleanField(default=False)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["date", "time"]

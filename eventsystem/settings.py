@@ -56,6 +56,6 @@ DATABASES = {
 }
 
 STATIC_URL = "/static/"
-STATIC_ROOT = BASE_DIR / "static"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 CSRF_TRUSTED_ORIGINS = ["https://im24.pythonanywhere.com"]

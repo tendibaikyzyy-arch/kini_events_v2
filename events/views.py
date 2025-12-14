@@ -69,56 +69,64 @@ def _event_dt(event: Event):
     return timezone.make_aware(datetime.combine(event.date, t), timezone.get_current_timezone())
 
 
+def _reminder_title_body(event: Event, now):
+    dt = _event_dt(event)
+    diff = dt - now
+    if diff.total_seconds() <= 0:
+        when_str = f"{event.date} {event.time or ''}".strip()
+        return "Событие уже прошло", f"Мероприятие «{event.title}» ({when_str}) уже завершилось."
+
+    days = int(diff.total_seconds() // 86400)
+    when_str = f"{event.date} {event.time or ''}".strip()
+
+    if days == 0:
+        return "Напоминание", f"У вас мероприятие «{event.title}» сегодня. ({when_str})."
+
+    return "Напоминание", f"У вас мероприятие «{event.title}» через {days} дн. ({when_str})."
+
+
 def generate_reminders_for_user(user):
     today = timezone.localdate()
     now = timezone.localtime()
 
-    regs = Registration.objects.select_related("event").filter(user=user)
-    created_texts = []
+    regs = (
+        Registration.objects
+        .select_related("event")
+        .filter(user=user, event__is_cancelled=False)
+    )
+
+    created = []
 
     for r in regs:
         e = r.event
-
-        if e.is_cancelled:
-            continue
 
         if r.last_reminded_on == today:
             continue
 
         dt = _event_dt(e)
-        diff = dt - now
-        seconds = diff.total_seconds()
-
-        if seconds <= 0:
+        if dt <= now:
             continue
 
-        days = int(seconds // 86400)
-        hours = int((seconds % 86400) // 3600)
+        diff_days = int((dt - now).total_seconds() // 86400)
+        if diff_days > 14:
+            continue
 
-        when_str = f"{e.date} {e.time or ''}".strip()
-
-        if days == 0:
-            title = "Напоминание: сегодня"
-            body = f"Сегодня «{e.title}» ({when_str}). Осталось примерно {hours} ч."
-        else:
-            title = "Напоминание"
-            body = f"У вас мероприятие «{e.title}» через {days} дн. ({when_str})."
-
+        title, body = _reminder_title_body(e, now)
         Notification.objects.create(user=user, title=title, body=body)
 
         r.last_reminded_on = today
         r.save(update_fields=["last_reminded_on"])
 
-        created_texts.append(f"{title}: {body}")
+        created.append(f"{title}: {body}")
 
-    return created_texts
+    return created
 
 
 @login_required(login_url="/login/")
 def dashboard(request):
     texts = generate_reminders_for_user(request.user)
-    for t in texts[:1]:
-        messages.info(request, t)
+    if texts:
+        messages.info(request, texts[0])
     return render(request, "events/dashboard.html")
 
 
@@ -126,8 +134,8 @@ def dashboard(request):
 def events_json(request):
     now = timezone.localtime()
     events = Event.objects.filter(is_cancelled=False).order_by("date", "time")
-
     data = []
+
     for e in events:
         dt = _event_dt(e)
         is_past = dt <= now
@@ -151,7 +159,12 @@ def events_json(request):
 
 @login_required(login_url="/login/")
 def my_events_json(request):
-    regs = Registration.objects.select_related("event").filter(user=request.user).order_by("created_at")
+    regs = (
+        Registration.objects
+        .select_related("event")
+        .filter(user=request.user, event__is_cancelled=False)
+        .order_by("created_at")
+    )
     data = []
     for r in regs:
         e = r.event
@@ -180,17 +193,26 @@ def notifications_json(request):
     return JsonResponse(data, safe=False)
 
 
-@login_required
+@login_required(login_url="/login/")
+def reminders_json(request):
+    return JsonResponse([], safe=False)
+
+
+@login_required(login_url="/login/")
 def register_for_event(request, event_id):
+    if request.method != "POST":
+        return HttpResponseForbidden("Только POST")
+
     event = get_object_or_404(Event, id=event_id)
 
-    now = timezone.localtime()
-    event_dt = timezone.make_aware(
-        datetime.combine(event.date, event.time or datetime.min.time())
-    )
+    if event.is_cancelled:
+        messages.error(request, "Ошибка: это мероприятие отменено.")
+        return redirect("dashboard")
 
-    if event_dt <= now:
-        messages.error(request, "Мероприятие уже прошло.")
+    now = timezone.localtime()
+    dt = _event_dt(event)
+    if dt <= now:
+        messages.error(request, "Ошибка: это мероприятие уже прошло. Записаться нельзя.")
         return redirect("dashboard")
 
     if event.is_full():
@@ -200,10 +222,17 @@ def register_for_event(request, event_id):
     try:
         Registration.objects.create(user=request.user, event=event)
     except IntegrityError:
-        messages.info(request, "Вы уже записаны.")
+        messages.info(request, "Вы уже зарегистрированы на это мероприятие.")
         return redirect("dashboard")
 
-    messages.success(request, "Вы записаны на мероприятие.")
+    if event.created_by and event.created_by != request.user:
+        Notification.objects.create(
+            user=event.created_by,
+            title="Новая регистрация",
+            body=f"{request.user.username} записался на «{event.title}» ({event.date} {event.time or ''})."
+        )
+
+    messages.success(request, "Вы записаны! Напоминание придёт при следующем входе.")
     return redirect("dashboard")
 
 
@@ -241,7 +270,7 @@ def reports(request):
     if not request.user.is_staff:
         return HttpResponseForbidden("Только администраторы/организаторы могут смотреть отчёты.")
 
-    events = Event.objects.all().order_by("date")
+    events = Event.objects.filter(is_cancelled=False).order_by("date")
     rows = []
     for e in events:
         regs = Registration.objects.filter(event=e)
@@ -250,5 +279,4 @@ def reports(request):
         rate = round(attended / total * 100) if total > 0 else 0
         avg = Feedback.objects.filter(event=e).aggregate(avg=Avg("rating"))["avg"]
         rows.append({"event": e, "total": total, "attended": attended, "rate": rate, "avg_rating": avg})
-
     return render(request, "events/reports.html", {"rows": rows})
