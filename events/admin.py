@@ -1,4 +1,4 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.utils import timezone
 
 from .models import Event, Registration, Notification, Feedback
@@ -7,81 +7,82 @@ from .models import Event, Registration, Notification, Feedback
 @admin.register(Event)
 class EventAdmin(admin.ModelAdmin):
     list_display = ("title", "date", "time", "place", "capacity", "created_by", "is_cancelled")
-    list_filter = ("date",)
+    list_filter = ("date", "is_cancelled")
     search_fields = ("title", "description", "place")
     actions = ("cancel_events",)
 
-    def is_cancelled(self, obj):
-        return bool(getattr(obj, "event_cancelled_at", None))
-    is_cancelled.boolean = True
-    is_cancelled.short_description = "Отменено"
+    def get_queryset(self, request):
+        # ✅ чтобы "исчезало" из списка мероприятий в админке
+        qs = super().get_queryset(request)
+        return qs.filter(is_cancelled=False)
 
-    def _notify_registered(self, event, title, body):
-        regs = Registration.objects.select_related("user").filter(event=event)
-        notes = []
-        for r in regs:
-            notes.append(Notification(user=r.user, title=title, body=body))
-        if notes:
-            Notification.objects.bulk_create(notes)
-
-    @admin.action(description="Отменить выбранные события (и уведомить участников)")
+    @admin.action(description="Отменить выбранные мероприятия (и уведомить участников)")
     def cancel_events(self, request, queryset):
-        now = timezone.now()
-        for event in queryset:
-            if getattr(event, "event_cancelled_at", None):
-                continue
-            event.event_cancelled_at = now
-            event.save(update_fields=["event_cancelled_at"])
+        now = timezone.localtime()
+        cancelled_count = 0
 
-            self._notify_registered(
-                event,
-                "Мероприятие отменено",
-                f"Мероприятие «{event.title}» ({event.date} {event.time or ''}) отменено."
-            )
+        for event in queryset:
+            if event.is_cancelled:
+                continue
+
+            event.is_cancelled = True
+            event.cancelled_at = now
+            event.save(update_fields=["is_cancelled", "cancelled_at"])
+            cancelled_count += 1
+
+            # ✅ уведомляем всех зарегистрированных
+            regs = Registration.objects.select_related("user").filter(event=event)
+            when_str = f"{event.date} {event.time or ''}".strip()
+
+            for r in regs:
+                Notification.objects.create(
+                    user=r.user,
+                    title="Мероприятие отменено",
+                    body=f"Мероприятие «{event.title}» ({when_str}) было отменено организатором."
+                )
+
+        self.message_user(request, f"Отменено мероприятий: {cancelled_count}", level=messages.SUCCESS)
 
     def save_model(self, request, obj, form, change):
+        """
+        ✅ если админ меняет дату/время/место — уведомить всех зарегистрированных
+        """
         old = None
         if change and obj.pk:
-            old = Event.objects.filter(pk=obj.pk).first()
+            try:
+                old = Event.objects.get(pk=obj.pk)
+            except Event.DoesNotExist:
+                old = None
 
         super().save_model(request, obj, form, change)
 
-        if not old:
+        # если отменено — не шлём "изменения"
+        if obj.is_cancelled:
             return
 
-        # 1) если событие стало отменённым через редактирование
-        if hasattr(obj, "event_cancelled_at"):
-            was_cancelled = bool(getattr(old, "event_cancelled_at", None))
-            is_cancelled = bool(getattr(obj, "event_cancelled_at", None))
-            if (not was_cancelled) and is_cancelled:
-                self._notify_registered(
-                    obj,
-                    "Мероприятие отменено",
-                    f"Мероприятие «{obj.title}» ({obj.date} {obj.time or ''}) отменено."
-                )
-                return
+        if old is not None:
+            changed_fields = []
+            if old.date != obj.date:
+                changed_fields.append("дата")
+            if old.time != obj.time:
+                changed_fields.append("время")
+            if old.place != obj.place:
+                changed_fields.append("место")
 
-        # 2) если изменили важные поля (дата/время/место/название)
-        changed = []
-        if old.title != obj.title:
-            changed.append(("Название", old.title, obj.title))
-        if old.date != obj.date:
-            changed.append(("Дата", str(old.date), str(obj.date)))
-        if old.time != obj.time:
-            changed.append(("Время", str(old.time or ""), str(obj.time or "")))
-        if old.place != obj.place:
-            changed.append(("Место", old.place or "-", obj.place or "-"))
+            if changed_fields:
+                regs = Registration.objects.select_related("user").filter(event=obj)
+                before = f"{old.date} {old.time or ''}".strip()
+                after = f"{obj.date} {obj.time or ''}".strip()
 
-        if changed:
-            lines = ["Организатор изменил данные мероприятия:"]
-            for name, before, after in changed:
-                lines.append(f"{name}: {before} → {after}")
-
-            self._notify_registered(
-                obj,
-                "Изменение мероприятия",
-                "\n".join(lines)
-            )
+                for r in regs:
+                    Notification.objects.create(
+                        user=r.user,
+                        title="Изменение мероприятия",
+                        body=(
+                            f"Изменилось мероприятие «{obj.title}»: "
+                            f"{', '.join(changed_fields)}. Было: ({before}), стало: ({after})."
+                        )
+                    )
 
 
 @admin.register(Registration)
@@ -106,5 +107,6 @@ class FeedbackAdmin(admin.ModelAdmin):
 
     def has_reply(self, obj):
         return bool(obj.reply)
+
     has_reply.boolean = True
     has_reply.short_description = "Ответ"

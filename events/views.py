@@ -66,7 +66,10 @@ def logout_view(request):
 
 def _event_dt(event: Event):
     t = event.time or datetime.min.time()
-    return timezone.make_aware(datetime.combine(event.date, t), timezone.get_current_timezone())
+    return timezone.make_aware(
+        datetime.combine(event.date, t),
+        timezone.get_current_timezone()
+    )
 
 
 def _reminder_title_body(event: Event, now=None):
@@ -82,9 +85,12 @@ def _reminder_title_body(event: Event, now=None):
     total_minutes = int(diff.total_seconds() // 60)
     days = total_minutes // (60 * 24)
     hours = (total_minutes % (60 * 24)) // 60
+    minutes = total_minutes % 60
 
+    if days == 0 and hours == 0:
+        return "Напоминание", f"У вас мероприятие «{event.title}» через {minutes} мин. ({when_str})."
     if days == 0:
-        return "Напоминание", f"У вас мероприятие «{event.title}» сегодня ({when_str})."
+        return "Напоминание", f"У вас мероприятие «{event.title}» через {hours} ч. {minutes} мин. ({when_str})."
     return "Напоминание", f"У вас мероприятие «{event.title}» через {days} дн. ({when_str})."
 
 
@@ -92,9 +98,11 @@ def generate_reminders_for_user(user):
     today = timezone.localdate()
     now = timezone.localtime()
 
+    # ✅ только активные события (не отменённые)
     regs = (
-        Registration.objects.select_related("event")
-        .filter(user=user, event__event_cancelled_at__isnull=True)
+        Registration.objects
+        .select_related("event")
+        .filter(user=user, event__is_cancelled=False)
     )
 
     created_texts = []
@@ -102,6 +110,7 @@ def generate_reminders_for_user(user):
     for r in regs:
         e = r.event
 
+        # ✅ не чаще 1 раза в день на регистрацию
         if r.last_reminded_on == today:
             continue
 
@@ -124,6 +133,7 @@ def generate_reminders_for_user(user):
 @login_required(login_url="/login/")
 def dashboard(request):
     texts = generate_reminders_for_user(request.user)
+    # максимум 2 тоста за вход
     for t in texts[:2]:
         messages.info(request, t)
     return render(request, "events/dashboard.html")
@@ -133,7 +143,8 @@ def dashboard(request):
 def events_json(request):
     now = timezone.localtime()
 
-    events = Event.objects.filter(event_cancelled_at__isnull=True).order_by("date", "time")
+    # ✅ показываем только неотменённые
+    events = Event.objects.filter(is_cancelled=False).order_by("date", "time")
     data = []
 
     for e in events:
@@ -162,8 +173,9 @@ def events_json(request):
 @login_required(login_url="/login/")
 def my_events_json(request):
     regs = (
-        Registration.objects.select_related("event")
-        .filter(user=request.user, event__event_cancelled_at__isnull=True)
+        Registration.objects
+        .select_related("event")
+        .filter(user=request.user, event__is_cancelled=False)
         .order_by("created_at")
     )
     data = []
@@ -206,17 +218,20 @@ def register_for_event(request, event_id):
 
     event = get_object_or_404(Event, id=event_id)
 
-    if getattr(event, "event_cancelled_at", None):
+    # ✅ если отменено — нельзя
+    if event.is_cancelled:
         messages.error(request, "Это мероприятие отменено. Записаться нельзя.")
         return redirect("dashboard")
 
     now = timezone.localtime()
     event_dt = _event_dt(event)
 
+    # ✅ если прошло — нельзя
     if event_dt <= now:
         messages.error(request, "Ошибка: это мероприятие уже прошло. Записаться нельзя.")
         return redirect("dashboard")
 
+    # ✅ если мест нет — нельзя
     if event.is_full():
         messages.error(request, "Свободных мест нет.")
         return redirect("dashboard")
@@ -227,12 +242,11 @@ def register_for_event(request, event_id):
         messages.info(request, "Вы уже зарегистрированы на это мероприятие.")
         return redirect("dashboard")
 
-    Notification.objects.create(
-        user=request.user,
-        title="Вы успешно записались",
-        body=f"Вы записались на «{event.title}» ({event.date} {event.time or ''}).",
-    )
+    # ✅ по твоей логике: после записи создаём 1 уведомление (напоминание)
+    title, body = _reminder_title_body(event, now=now)
+    Notification.objects.create(user=request.user, title=title, body=body)
 
+    # ✅ уведомление организатору о регистрации
     if event.created_by and event.created_by != request.user:
         Notification.objects.create(
             user=event.created_by,
