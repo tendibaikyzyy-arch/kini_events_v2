@@ -1,25 +1,25 @@
-from django.contrib import admin, messages
+from django.contrib import admin
 from django.utils import timezone
 
 from .models import Event, Registration, Notification, Feedback
 
 
+def _notify_participants(event: Event, title: str, body: str):
+    regs = event.registrations.select_related("user").all()
+    for r in regs:
+        Notification.objects.create(user=r.user, title=title, body=body)
+
+
 @admin.register(Event)
 class EventAdmin(admin.ModelAdmin):
-    list_display = ("title", "date", "time", "place", "capacity", "created_by", "is_cancelled")
+    list_display = ("title", "date", "time", "place", "capacity", "created_by", "is_cancelled", "cancelled_at")
     list_filter = ("date", "is_cancelled")
     search_fields = ("title", "description", "place")
-    actions = ("cancel_events",)
+    actions = ["cancel_selected_events"]
 
-    def get_queryset(self, request):
-        # ✅ чтобы "исчезало" из списка мероприятий в админке
-        qs = super().get_queryset(request)
-        return qs.filter(is_cancelled=False)
-
-    @admin.action(description="Отменить выбранные мероприятия (и уведомить участников)")
-    def cancel_events(self, request, queryset):
+    def cancel_selected_events(self, request, queryset):
         now = timezone.localtime()
-        cancelled_count = 0
+        count = 0
 
         for event in queryset:
             if event.is_cancelled:
@@ -28,61 +28,61 @@ class EventAdmin(admin.ModelAdmin):
             event.is_cancelled = True
             event.cancelled_at = now
             event.save(update_fields=["is_cancelled", "cancelled_at"])
-            cancelled_count += 1
 
-            # ✅ уведомляем всех зарегистрированных
-            regs = Registration.objects.select_related("user").filter(event=event)
             when_str = f"{event.date} {event.time or ''}".strip()
+            _notify_participants(
+                event,
+                "Мероприятие отменено",
+                f"Мероприятие «{event.title}» ({when_str}) отменено."
+            )
+            count += 1
 
-            for r in regs:
-                Notification.objects.create(
-                    user=r.user,
-                    title="Мероприятие отменено",
-                    body=f"Мероприятие «{event.title}» ({when_str}) было отменено организатором."
-                )
+        self.message_user(request, f"Отменено мероприятий: {count}")
 
-        self.message_user(request, f"Отменено мероприятий: {cancelled_count}", level=messages.SUCCESS)
+    cancel_selected_events.short_description = "Отменить выбранные мероприятия (и уведомить участников)"
 
     def save_model(self, request, obj, form, change):
-        """
-        ✅ если админ меняет дату/время/место — уведомить всех зарегистрированных
-        """
+        # до сохранения — берём старую версию, чтобы понять что изменилось
         old = None
         if change and obj.pk:
-            try:
-                old = Event.objects.get(pk=obj.pk)
-            except Event.DoesNotExist:
-                old = None
+            old = Event.objects.get(pk=obj.pk)
+
+        # если админ поставил is_cancelled=True вручную — проставим cancelled_at
+        if obj.is_cancelled and not obj.cancelled_at:
+            obj.cancelled_at = timezone.localtime()
 
         super().save_model(request, obj, form, change)
 
-        # если отменено — не шлём "изменения"
-        if obj.is_cancelled:
-            return
+        # после сохранения — рассылаем уведомления
+        if old:
+            # 1) отмена через чекбокс
+            if (not old.is_cancelled) and obj.is_cancelled:
+                when_str = f"{obj.date} {obj.time or ''}".strip()
+                _notify_participants(
+                    obj,
+                    "Мероприятие отменено",
+                    f"Мероприятие «{obj.title}» ({when_str}) отменено."
+                )
+                return
 
-        if old is not None:
-            changed_fields = []
-            if old.date != obj.date:
-                changed_fields.append("дата")
-            if old.time != obj.time:
-                changed_fields.append("время")
+            # 2) изменение даты/времени/места/названия
+            changed = []
+            if old.date != obj.date or old.time != obj.time:
+                changed.append("дата/время")
             if old.place != obj.place:
-                changed_fields.append("место")
+                changed.append("место")
+            if old.title != obj.title:
+                changed.append("название")
 
-            if changed_fields:
-                regs = Registration.objects.select_related("user").filter(event=obj)
-                before = f"{old.date} {old.time or ''}".strip()
-                after = f"{obj.date} {obj.time or ''}".strip()
-
-                for r in regs:
-                    Notification.objects.create(
-                        user=r.user,
-                        title="Изменение мероприятия",
-                        body=(
-                            f"Изменилось мероприятие «{obj.title}»: "
-                            f"{', '.join(changed_fields)}. Было: ({before}), стало: ({after})."
-                        )
-                    )
+            if changed and (not obj.is_cancelled):
+                old_when = f"{old.date} {old.time or ''}".strip()
+                new_when = f"{obj.date} {obj.time or ''}".strip()
+                _notify_participants(
+                    obj,
+                    "Изменение мероприятия",
+                    f"Мероприятие было обновлено ({', '.join(changed)}): "
+                    f"«{old.title}» ({old_when}) → «{obj.title}» ({new_when})."
+                )
 
 
 @admin.register(Registration)

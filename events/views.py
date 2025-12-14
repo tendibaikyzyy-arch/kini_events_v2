@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, time as dtime
 
 from django.utils import timezone
 from django.shortcuts import render, redirect, get_object_or_404
@@ -64,44 +64,28 @@ def logout_view(request):
     return redirect("login")
 
 
-# ---------- helpers ----------
-
 def _event_dt(event: Event):
-    t = event.time or datetime.min.time()
-    return timezone.make_aware(
-        datetime.combine(event.date, t),
-        timezone.get_current_timezone()
-    )
+    t = event.time or dtime(0, 0, 0)
+    return timezone.make_aware(datetime.combine(event.date, t), timezone.get_current_timezone())
 
 
 def _reminder_title_body(event: Event, now=None):
     now = now or timezone.localtime()
     dt = _event_dt(event)
-    diff = dt - now
 
-    when_str = f"{event.date} {event.time or ''}".strip()
+    when_str = f"{event.date} {event.time or dtime(0,0,0)}"
 
-    # если вдруг вызвали для прошедшего — вернём «прошло»
-    if diff.total_seconds() <= 0:
+    if dt <= now:
         return "Событие уже прошло", f"Мероприятие «{event.title}» ({when_str}) уже завершилось."
 
-    total_minutes = int(diff.total_seconds() // 60)
-    days = total_minutes // (60 * 24)
-    hours = (total_minutes % (60 * 24)) // 60
+    days = (dt.date() - now.date()).days
 
-    if days == 0:
+    if days <= 0:
         return "Напоминание", f"У вас мероприятие «{event.title}» сегодня ({when_str})."
     return "Напоминание", f"У вас мероприятие «{event.title}» через {days} дн. ({when_str})."
 
 
 def generate_reminders_for_user(user):
-    """
-    При каждом входе (dashboard) создаёт максимум 2 напоминания-тоста,
-    но по каждой регистрации — не чаще 1 раза в день (last_reminded_on).
-    Напоминания создаются только для:
-    - НЕ отменённых событий
-    - будущих событий
-    """
     today = timezone.localdate()
     now = timezone.localtime()
 
@@ -116,16 +100,14 @@ def generate_reminders_for_user(user):
     for r in regs:
         e = r.event
 
-        # уже напоминали сегодня
         if r.last_reminded_on == today:
             continue
 
-        # событие в прошлом
-        if _event_dt(e) <= now:
+        dt = _event_dt(e)
+        if dt <= now:
             continue
 
         title, body = _reminder_title_body(e, now=now)
-
         Notification.objects.create(user=user, title=title, body=body)
 
         r.last_reminded_on = today
@@ -133,20 +115,17 @@ def generate_reminders_for_user(user):
 
         created_texts.append(f"{title}: {body}")
 
-        # максимум 2 тоста за вход
-        if len(created_texts) >= 2:
-            break
-
     return created_texts
 
-
-# ---------- pages / api ----------
 
 @login_required(login_url="/login/")
 def dashboard(request):
     texts = generate_reminders_for_user(request.user)
-    for t in texts:
+
+    # максимум 2 тоста за вход
+    for t in texts[:2]:
         messages.info(request, t)
+
     return render(request, "events/dashboard.html")
 
 
@@ -186,6 +165,7 @@ def my_events_json(request):
         .filter(user=request.user, event__is_cancelled=False)
         .order_by("created_at")
     )
+
     data = []
     for r in regs:
         e = r.event
@@ -196,6 +176,7 @@ def my_events_json(request):
             "time": str(e.time) if e.time else "",
             "place": e.place,
         })
+
     return JsonResponse(data, safe=False)
 
 
@@ -221,36 +202,39 @@ def register_for_event(request, event_id):
 
     event = get_object_or_404(Event, id=event_id)
 
-    # отменено
+    # 1) отменено
     if event.is_cancelled:
         messages.error(request, "Это мероприятие отменено. Записаться нельзя.")
         return redirect("dashboard")
 
     now = timezone.localtime()
-    event_dt = _event_dt(event)
+    dt = _event_dt(event)
 
-    # уже прошло
-    if event_dt <= now:
+    # 2) прошло
+    if dt <= now:
         messages.error(request, "Ошибка: это мероприятие уже прошло. Записаться нельзя.")
         return redirect("dashboard")
 
-    # мест нет
+    # 3) нет мест
     if event.is_full():
         messages.error(request, "Свободных мест нет.")
         return redirect("dashboard")
 
-    # создаём регистрацию
     try:
-        Registration.objects.create(user=request.user, event=event)
+        reg = Registration.objects.create(user=request.user, event=event)
     except IntegrityError:
         messages.info(request, "Вы уже зарегистрированы на это мероприятие.")
         return redirect("dashboard")
 
-    # ✅ ТОЛЬКО ОДНО уведомление после записи — НАПОМИНАНИЕ (как ты просила)
+    # ✅ РОВНО 1 уведомление (напоминание)
     title, body = _reminder_title_body(event, now=now)
     Notification.objects.create(user=request.user, title=title, body=body)
 
-    # уведомление организатору
+    # чтобы после редиректа на dashboard не создалось второе напоминание в тот же день
+    reg.last_reminded_on = timezone.localdate()
+    reg.save(update_fields=["last_reminded_on"])
+
+    # уведомление организатору о регистрации (по требованию проекта)
     if event.created_by and event.created_by != request.user:
         Notification.objects.create(
             user=event.created_by,
@@ -258,7 +242,8 @@ def register_for_event(request, event_id):
             body=f"{request.user.username} записался на «{event.title}» ({event.date} {event.time or ''}).",
         )
 
-    messages.success(request, "Вы записаны! Событие появится во вкладке “Мои события”.")
+    # один тост
+    messages.info(request, f"{title}: {body}")
     return redirect("dashboard")
 
 
