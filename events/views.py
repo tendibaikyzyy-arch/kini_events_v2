@@ -117,7 +117,7 @@ def generate_reminders_for_user(user):
 @login_required(login_url="/login/")
 def dashboard(request):
     texts = generate_reminders_for_user(request.user)
-    for t in texts[:2]:
+    for t in texts[:1]:
         messages.info(request, t)
     return render(request, "events/dashboard.html")
 
@@ -180,21 +180,17 @@ def notifications_json(request):
     return JsonResponse(data, safe=False)
 
 
-@login_required(login_url="/login/")
+@login_required
 def register_for_event(request, event_id):
-    if request.method != "POST":
-        return HttpResponseForbidden("Только POST")
-
     event = get_object_or_404(Event, id=event_id)
 
-    if event.is_cancelled:
-        messages.error(request, "Ошибка: мероприятие отменено. Записаться нельзя.")
-        return redirect("dashboard")
-
     now = timezone.localtime()
-    dt = _event_dt(event)
-    if dt <= now:
-        messages.error(request, "Ошибка: это мероприятие уже прошло. Записаться нельзя.")
+    event_dt = timezone.make_aware(
+        datetime.combine(event.date, event.time or datetime.min.time())
+    )
+
+    if event_dt <= now:
+        messages.error(request, "Мероприятие уже прошло.")
         return redirect("dashboard")
 
     if event.is_full():
@@ -204,23 +200,10 @@ def register_for_event(request, event_id):
     try:
         Registration.objects.create(user=request.user, event=event)
     except IntegrityError:
-        messages.info(request, "Вы уже зарегистрированы на это мероприятие.")
+        messages.info(request, "Вы уже записаны.")
         return redirect("dashboard")
 
-    Notification.objects.create(
-        user=request.user,
-        title="Вы успешно записались",
-        body=f"Вы записались на «{event.title}» ({event.date} {event.time or ''})."
-    )
-
-    if event.created_by and event.created_by != request.user:
-        Notification.objects.create(
-            user=event.created_by,
-            title="Новая регистрация",
-            body=f"{request.user.username} записался на «{event.title}» ({event.date} {event.time or ''})."
-        )
-
-    messages.success(request, "Вы записаны! Событие появится во вкладке “Мои события”.")
+    messages.success(request, "Вы записаны на мероприятие.")
     return redirect("dashboard")
 
 
