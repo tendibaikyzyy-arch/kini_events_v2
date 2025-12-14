@@ -18,7 +18,7 @@ urlpatterns = [
 
     path('reports/', views.reports, name='reports'),
 
-   # path('reminders-json/', views.reminders_json, name='reminders_json'),
+    path('reminders-json/', views.reminders_json, name='reminders_json'),
 
     path('events/<int:event_id>/feedback/', views.leave_feedback, name='leave_feedback'),
 ]
