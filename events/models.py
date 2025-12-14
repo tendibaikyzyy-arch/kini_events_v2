@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import models
 
+
 class Event(models.Model):
     title = models.CharField(max_length=200)
     description = models.TextField(blank=True)
@@ -15,6 +16,8 @@ class Event(models.Model):
         null=True, blank=True,
         related_name="events_created"
     )
+
+    is_cancelled = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["date", "time"]
@@ -34,9 +37,8 @@ class Registration(models.Model):
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="registrations")
     created_at = models.DateTimeField(auto_now_add=True)
 
-    attended = models.BooleanField(default=False)  # отметить "пришёл/не пришёл"
-
-    last_reminded_on = models.DateField(null=True, blank=True) 
+    attended = models.BooleanField(default=False)
+    last_reminded_on = models.DateField(null=True, blank=True)
 
     class Meta:
         unique_together = ("user", "event")
@@ -60,7 +62,7 @@ class Notification(models.Model):
 
 
 class Feedback(models.Model):
-    RATING_CHOICES = [(1,"1"),(2,"2"),(3,"3"),(4,"4"),(5,"5")]
+    RATING_CHOICES = [(1, "1"), (2, "2"), (3, "3"), (4, "4"), (5, "5")]
 
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="feedbacks")
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="feedbacks")
@@ -77,3 +79,4 @@ class Feedback(models.Model):
 
     def __str__(self):
         return f"Feedback({self.event.title}, {self.user.username}, {self.rating})"
+
