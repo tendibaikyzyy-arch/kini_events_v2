@@ -11,7 +11,6 @@ urlpatterns = [
     path("events-json/", views.events_json, name="events_json"),
     path("my-events-json/", views.my_events_json, name="my_events_json"),
     path("notifications-json/", views.notifications_json, name="notifications_json"),
-   # path("reminders-json/", views.reminders_json, name="reminders_json"),
 
     path("events/<int:event_id>/book/", views.register_for_event, name="register_for_event"),
     path("events/<int:event_id>/feedback/", views.leave_feedback, name="leave_feedback"),
