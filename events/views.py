@@ -74,7 +74,7 @@ def generate_reminders_for_user(user):
     now = timezone.localtime()
 
     regs = Registration.objects.select_related("event").filter(user=user)
-    created_texts = []
+    reminders = []
 
     for r in regs:
         e = r.event
@@ -109,17 +109,28 @@ def generate_reminders_for_user(user):
         r.last_reminded_on = today
         r.save(update_fields=["last_reminded_on"])
 
-        created_texts.append(f"{title}: {body}")
+        reminders.append({
+            "title": e.title,
+            "body": body,
+            "when": when_str,
+            "place": e.place,
+        })
 
-    return created_texts
+    return reminders
 
 
 @login_required(login_url="/login/")
 def dashboard(request):
-    texts = generate_reminders_for_user(request.user)
-    for t in texts[:2]:
-        messages.info(request, t)
+    reminders = generate_reminders_for_user(request.user)
+    for r in reminders[:2]:
+        messages.info(request, f"{r['title']}: {r['body']}")
     return render(request, "events/dashboard.html")
+
+
+@login_required(login_url="/login/")
+def reminders_json(request):
+    reminders = generate_reminders_for_user(request.user)
+    return JsonResponse(reminders, safe=False)
 
 
 @login_required(login_url="/login/")

@@ -114,19 +114,19 @@
     }
 
     async function showRemindersToasts(){
-  try{
-    const res = await fetch(URL_REMINDERS_JSON);
-    const data = await res.json();
-    if(!data.length) return;
+      try{
+        const res = await fetch(URL_REMINDERS_JSON);
+        const data = await res.json();
+        if(!data.length) return;
 
-    data.forEach(r => {
-      const txt = `Напоминание: ${r.title} ${r.when}` + (r.place ? ` • ${r.place}` : '');
-      createToast(txt, 'ok');
-    });
-  }catch(e){
-    // молча
-  }
-}
+        data.forEach(r => {
+          const txt = `Напоминание: ${r.title} ${r.when}` + (r.place ? ` • ${r.place}` : '');
+          createToast(txt, 'ok');
+        });
+      }catch(e){
+        // молча
+      }
+    }
 
     
     function updateNotifMenuBadge(count){
@@ -187,6 +187,7 @@
       calendar.render();
 
       showDjangoMessagesAsToasts();
+      showRemindersToasts();
       initNotifBadge();
     });
 
