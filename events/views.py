@@ -1,12 +1,12 @@
 from datetime import datetime
-from django.utils import timezone
 
+from django.utils import timezone
 from django.shortcuts import render, redirect, get_object_or_404
 from django.http import JsonResponse, HttpResponseForbidden
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
-from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
+from django.contrib.auth.decorators import login_required
 from django.db import IntegrityError
 from django.db.models import Avg
 
@@ -69,19 +69,22 @@ def _event_dt(event: Event):
     return timezone.make_aware(datetime.combine(event.date, t), timezone.get_current_timezone())
 
 
-def _reminder_title_body(event: Event, now):
+def _reminder_title_body(event: Event, now=None):
+    now = now or timezone.localtime()
     dt = _event_dt(event)
     diff = dt - now
-    if diff.total_seconds() <= 0:
-        when_str = f"{event.date} {event.time or ''}".strip()
-        return "Событие уже прошло", f"Мероприятие «{event.title}» ({when_str}) уже завершилось."
 
-    days = int(diff.total_seconds() // 86400)
     when_str = f"{event.date} {event.time or ''}".strip()
 
-    if days == 0:
-        return "Напоминание", f"У вас мероприятие «{event.title}» сегодня. ({when_str})."
+    if diff.total_seconds() <= 0:
+        return "Событие уже прошло", f"Мероприятие «{event.title}» ({when_str}) уже завершилось."
 
+    total_minutes = int(diff.total_seconds() // 60)
+    days = total_minutes // (60 * 24)
+    hours = (total_minutes % (60 * 24)) // 60
+
+    if days == 0:
+        return "Напоминание", f"У вас мероприятие «{event.title}» сегодня ({when_str})."
     return "Напоминание", f"У вас мероприятие «{event.title}» через {days} дн. ({when_str})."
 
 
@@ -90,12 +93,11 @@ def generate_reminders_for_user(user):
     now = timezone.localtime()
 
     regs = (
-        Registration.objects
-        .select_related("event")
-        .filter(user=user, event__is_cancelled=False)
+        Registration.objects.select_related("event")
+        .filter(user=user, event__event_cancelled_at__isnull=True)
     )
 
-    created = []
+    created_texts = []
 
     for r in regs:
         e = r.event
@@ -103,37 +105,35 @@ def generate_reminders_for_user(user):
         if r.last_reminded_on == today:
             continue
 
-        dt = _event_dt(e)
-        if dt <= now:
+        event_dt = _event_dt(e)
+        if event_dt <= now:
             continue
 
-        diff_days = int((dt - now).total_seconds() // 86400)
-        if diff_days > 14:
-            continue
+        title, body = _reminder_title_body(e, now=now)
 
-        title, body = _reminder_title_body(e, now)
         Notification.objects.create(user=user, title=title, body=body)
 
         r.last_reminded_on = today
         r.save(update_fields=["last_reminded_on"])
 
-        created.append(f"{title}: {body}")
+        created_texts.append(f"{title}: {body}")
 
-    return created
+    return created_texts
 
 
 @login_required(login_url="/login/")
 def dashboard(request):
     texts = generate_reminders_for_user(request.user)
-    if texts:
-        messages.info(request, texts[0])
+    for t in texts[:2]:
+        messages.info(request, t)
     return render(request, "events/dashboard.html")
 
 
 @login_required(login_url="/login/")
 def events_json(request):
     now = timezone.localtime()
-    events = Event.objects.filter(is_cancelled=False).order_by("date", "time")
+
+    events = Event.objects.filter(event_cancelled_at__isnull=True).order_by("date", "time")
     data = []
 
     for e in events:
@@ -142,17 +142,19 @@ def events_json(request):
         is_full = e.is_full()
 
         start = f"{e.date}T{(e.time or '00:00')}"
-        data.append({
-            "id": e.id,
-            "title": e.title,
-            "start": start,
-            "description": e.description,
-            "place": e.place,
-            "capacity": e.capacity,
-            "taken": e.registered_count(),
-            "is_past": is_past,
-            "can_register": (not is_past) and (not is_full),
-        })
+        data.append(
+            {
+                "id": e.id,
+                "title": e.title,
+                "start": start,
+                "description": e.description,
+                "place": e.place,
+                "capacity": e.capacity,
+                "taken": e.registered_count(),
+                "is_past": is_past,
+                "can_register": (not is_past) and (not is_full),
+            }
+        )
 
     return JsonResponse(data, safe=False)
 
@@ -160,42 +162,41 @@ def events_json(request):
 @login_required(login_url="/login/")
 def my_events_json(request):
     regs = (
-        Registration.objects
-        .select_related("event")
-        .filter(user=request.user, event__is_cancelled=False)
+        Registration.objects.select_related("event")
+        .filter(user=request.user, event__event_cancelled_at__isnull=True)
         .order_by("created_at")
     )
     data = []
     for r in regs:
         e = r.event
-        data.append({
-            "id": e.id,
-            "title": e.title,
-            "date": str(e.date),
-            "time": str(e.time) if e.time else "",
-            "place": e.place,
-        })
+        data.append(
+            {
+                "id": e.id,
+                "title": e.title,
+                "date": str(e.date),
+                "time": str(e.time) if e.time else "",
+                "place": e.place,
+            }
+        )
     return JsonResponse(data, safe=False)
 
 
 @login_required(login_url="/login/")
 def notifications_json(request):
     notes = Notification.objects.filter(user=request.user).order_by("-created_at")[:100]
-    data = [{
-        "id": n.id,
-        "title": n.title,
-        "body": n.body,
-        "created": n.created_at.strftime("%Y-%m-%d %H:%M"),
-        "is_read": n.is_read,
-    } for n in notes]
+    data = [
+        {
+            "id": n.id,
+            "title": n.title,
+            "body": n.body,
+            "created": n.created_at.strftime("%Y-%m-%d %H:%M"),
+            "is_read": n.is_read,
+        }
+        for n in notes
+    ]
 
     Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
     return JsonResponse(data, safe=False)
-
-
-@login_required(login_url="/login/")
-def reminders_json(request):
-    return JsonResponse([], safe=False)
 
 
 @login_required(login_url="/login/")
@@ -205,13 +206,14 @@ def register_for_event(request, event_id):
 
     event = get_object_or_404(Event, id=event_id)
 
-    if event.is_cancelled:
-        messages.error(request, "Ошибка: это мероприятие отменено.")
+    if getattr(event, "event_cancelled_at", None):
+        messages.error(request, "Это мероприятие отменено. Записаться нельзя.")
         return redirect("dashboard")
 
     now = timezone.localtime()
-    dt = _event_dt(event)
-    if dt <= now:
+    event_dt = _event_dt(event)
+
+    if event_dt <= now:
         messages.error(request, "Ошибка: это мероприятие уже прошло. Записаться нельзя.")
         return redirect("dashboard")
 
@@ -225,14 +227,20 @@ def register_for_event(request, event_id):
         messages.info(request, "Вы уже зарегистрированы на это мероприятие.")
         return redirect("dashboard")
 
+    Notification.objects.create(
+        user=request.user,
+        title="Вы успешно записались",
+        body=f"Вы записались на «{event.title}» ({event.date} {event.time or ''}).",
+    )
+
     if event.created_by and event.created_by != request.user:
         Notification.objects.create(
             user=event.created_by,
             title="Новая регистрация",
-            body=f"{request.user.username} записался на «{event.title}» ({event.date} {event.time or ''})."
+            body=f"{request.user.username} записался на «{event.title}» ({event.date} {event.time or ''}).",
         )
 
-    messages.success(request, "Вы записаны! Напоминание придёт при следующем входе.")
+    messages.success(request, "Вы записаны! Событие появится во вкладке “Мои события”.")
     return redirect("dashboard")
 
 
@@ -257,7 +265,7 @@ def leave_feedback(request, event_id):
                 event=event,
                 user=request.user,
                 rating=int(rating),
-                comment=comment
+                comment=comment,
             )
             messages.success(request, "Спасибо за отзыв!")
             return redirect("dashboard")
@@ -270,7 +278,7 @@ def reports(request):
     if not request.user.is_staff:
         return HttpResponseForbidden("Только администраторы/организаторы могут смотреть отчёты.")
 
-    events = Event.objects.filter(is_cancelled=False).order_by("date")
+    events = Event.objects.all().order_by("date")
     rows = []
     for e in events:
         regs = Registration.objects.filter(event=e)
@@ -278,5 +286,13 @@ def reports(request):
         attended = regs.filter(attended=True).count()
         rate = round(attended / total * 100) if total > 0 else 0
         avg = Feedback.objects.filter(event=e).aggregate(avg=Avg("rating"))["avg"]
-        rows.append({"event": e, "total": total, "attended": attended, "rate": rate, "avg_rating": avg})
+        rows.append(
+            {
+                "event": e,
+                "total": total,
+                "attended": attended,
+                "rate": rate,
+                "avg_rating": avg,
+            }
+        )
     return render(request, "events/reports.html", {"rows": rows})
